@@ -10,7 +10,7 @@ from docutils.statemachine import StringList
 from docutils.utils import new_document
 from sphinx.util.nodes import nested_parse_with_titles
 
-from sphinxarg.parser import parse_parser, parser_navigate
+from sphinxarg4nni.parser import parse_parser, parser_navigate
 
 from . import __version__
 
@@ -64,7 +64,7 @@ def render_list(l, markdown_help, settings=None):
     if len(l) == 0:
         return []
     if markdown_help:
-        from sphinxarg.markdown import parse_markdown_block
+        from sphinxarg4nni.markdown import parse_markdown_block
 
         return parse_markdown_block('\n\n'.join(l) + '\n')
     else:
@@ -82,6 +82,20 @@ def render_list(l, markdown_help, settings=None):
         return all_children
 
 
+def create_table_row(*contents):
+    row = nodes.row()
+    for content in contents:
+        entry = nodes.entry()
+        if isinstance(content, str):
+            entry += nodes.paragraph(text=content)
+        elif isinstance(content, list):
+            entry.extend(content)
+        else:
+            entry += content
+        row += entry
+    return row
+
+
 def print_action_groups(data, nested_content, markdown_help=False, settings=None):
     """
     Process all 'action groups', which are also include 'Options' and 'Required
@@ -89,11 +103,12 @@ def print_action_groups(data, nested_content, markdown_help=False, settings=None
     """
     definitions = map_nested_definitions(nested_content)
     nodes_list = []
+    tables = {}
+    descriptions = {}
+
     if 'action_groups' in data:
         for action_group in data['action_groups']:
-            # Every action group is comprised of a section, holding a title, the description, and the option group (members)
-            section = nodes.section(ids=[action_group['title']])
-            section += nodes.title(action_group['title'], action_group['title'])
+            table_group_name = 'default' if action_group['title'] in ('Positional Arguments', 'Named Arguments') else action_group['title']
 
             desc = []
             if action_group['description']:
@@ -114,8 +129,28 @@ def print_action_groups(data, nested_content, markdown_help=False, settings=None
                     for k, v in map_nested_definitions(subcontent).items():
                         definitions[k] = v
             # Render appropriately
-            for element in render_list(desc, markdown_help):
-                section += element
+            descriptions[table_group_name] = render_list(desc, markdown_help)
+
+            if table_group_name not in tables:
+                table = nodes.table()
+                tgroup = nodes.tgroup(cols=4)
+                table += tgroup
+
+                col_widths = [25, 10, 20, 45]
+
+                for width in col_widths:
+                    colspec = nodes.colspec(colwidth=width)
+                    tgroup += colspec
+
+                thead = nodes.thead()
+                thead += create_table_row('Name / Shorthand', 'Required', 'Default', 'Description')
+                tgroup += thead
+
+                tbody = nodes.tbody()
+                tgroup += tbody
+                tables[table_group_name] = (table, tbody)
+
+            _, tbody = tables[table_group_name]
 
             local_definitions = definitions
             if len(subcontent) > 0:
@@ -123,7 +158,6 @@ def print_action_groups(data, nested_content, markdown_help=False, settings=None
                 for k, v in map_nested_definitions(subcontent).items():
                     local_definitions[k] = v
 
-            items = []
             # Iterate over action group members
             for entry in action_group['options']:
                 # Members will include:
@@ -141,10 +175,11 @@ def print_action_groups(data, nested_content, markdown_help=False, settings=None
                     '"==SUPPRESS=="',
                     '==SUPPRESS==',
                 ]:
-                    if entry['default'] == '':
-                        arg.append('Default: ""')
-                    else:
-                        arg.append(f"Default: {entry['default']}")
+                    default = str(entry['default'])
+                    if not default:
+                        default = '""'
+                else:
+                    default = ''
 
                 # Handle nested content, the term used in the dict has the comma removed for simplicity
                 desc = arg
@@ -159,20 +194,28 @@ def print_action_groups(data, nested_content, markdown_help=False, settings=None
                         desc.insert(0, s)
                 term = ', '.join(entry['name'])
 
-                n = nodes.option_list_item(
-                    '',
-                    nodes.option_group('', nodes.option_string(text=term)),
-                    nodes.description('', *render_list(desc, markdown_help, settings)),
+                row = create_table_row(
+                    nodes.literal(term, term),
+                    entry['required'],
+                    nodes.literal(default, default),
+                    render_list(desc, markdown_help, settings)
                 )
-                items.append(n)
+                tbody += row
 
-            section += nodes.option_list('', *items)
-            nodes_list.append(section)
+        for key, (table, _) in tables.items():
+            if key != 'default':
+                section = nodes.section(ids=[action_group['title']])
+                section += nodes.title(action_group['title'], action_group['title'])
+                for element in descriptions[key]:
+                    section += element
+                section += table
+            else:
+                nodes_list.append(table)
 
     return nodes_list
 
 
-def print_subcommands(data, nested_content, markdown_help=False, settings=None):  # noqa: N803
+def print_subcommands(data, nested_content, markdown_help=False, settings=None, prefix=None):  # noqa: N803
     """
     Each subcommand is a dictionary with the following keys:
 
@@ -185,19 +228,23 @@ def print_subcommands(data, nested_content, markdown_help=False, settings=None):
     definitions = map_nested_definitions(nested_content)
     items = []
     if 'children' in data:
-        subcommands = nodes.section(ids=["Sub-commands:"])
-        subcommands += nodes.title('Sub-commands:', 'Sub-commands:')
-
         for child in data['children']:
-            sec = nodes.section(ids=[child['name']])
-            sec += nodes.title(child['name'], child['name'])
+            full_name = prefix[:] or []
+            full_name.append(child['name'])
+            sec = nodes.section(ids=['-'.join(full_name)])
+
+            name = ' '.join(full_name[-2:])
+            sec += nodes.title(name, name)
 
             if 'description' in child and child['description']:
                 desc = [child['description']]
-            elif child['help']:
-                desc = [child['help']]
             else:
-                desc = ['Undocumented']
+                desc = []
+            
+            if child['help']:
+                help = [child['help']]
+            else:
+                help = []
 
             # Handle nested content
             subcontent = []
@@ -212,19 +259,23 @@ def print_subcommands(data, nested_content, markdown_help=False, settings=None):
 
             for element in render_list(desc, markdown_help):
                 sec += element
-            sec += nodes.literal_block(text=child['bare_usage'])
+            usage = nodes.literal_block(text=child['bare_usage'], classes=['highlight-bash'])
+            usage['language'] = 'bash'
+            sec += usage
             for x in print_action_groups(child, nested_content + subcontent, markdown_help, settings=settings):
                 sec += x
+            for element in render_list(help, markdown_help):
+                sec += element
 
-            for x in print_subcommands(child, nested_content + subcontent, markdown_help, settings=settings):
+            for x in print_subcommands(child, nested_content + subcontent, markdown_help,
+                                       settings=settings, prefix=full_name):
                 sec += x
 
             if 'epilog' in child and child['epilog']:
                 for element in render_list([child['epilog']], markdown_help):
                     sec += element
 
-            subcommands += sec
-        items.append(subcommands)
+            items.append(sec)
 
     return items
 
@@ -489,7 +540,7 @@ class ArgParseDirective(Directive):
         items = []
         nested_content = nodes.paragraph()
         if 'markdown' in self.options:
-            from sphinxarg.markdown import parse_markdown_block
+            from sphinxarg4nni.markdown import parse_markdown_block
 
             items.extend(parse_markdown_block('\n'.join(self.content) + '\n'))
         else:
@@ -524,6 +575,7 @@ class ArgParseDirective(Directive):
                     nested_content,
                     markdown_help,
                     settings=self.state.document.settings,
+                    prefix=[parser.prog],
                 )
             )
         if 'epilog' in result and 'noepilog' not in self.options:
