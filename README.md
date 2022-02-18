@@ -7,6 +7,12 @@ sphinx-argparse-nni
 ===================
 
 Modified to suit for the specific needs from NNI.
+### Packaging notes
+
+```bash
+python setup.py sdist
+python -m twine upload dist/*
+```
 
 ---------------------
 
@@ -15,3 +21,4 @@ A sphinx extension that automatically documents argparse commands and options.
 For installation and usage details see the [documentation](http://sphinx-argparse.readthedocs.org/en/latest/). The changelog is also [found there](http://sphinx-argparse.readthedocs.org/en/latest/changelog.html).
 
 This project used to live at [alex-rudakov/sphinx-argparse](https://github.com/alex-rudakov/sphinx-argparse/) that the original maintainer disappears so I have taken over the project under this new home.
+
